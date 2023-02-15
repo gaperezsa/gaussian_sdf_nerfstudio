@@ -215,6 +215,11 @@ class GaussianNeRFModel(Model):
         metrics_dict = {}
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
+        metrics_dict["F_min"] = self.field.f.min()
+        metrics_dict["F_max"] = self.field.f.max()
+        metrics_dict["F_mean"] = self.field.f.mean()
+        metrics_dict["F_std"] = self.field.f.std()
+
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):

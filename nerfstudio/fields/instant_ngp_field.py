@@ -123,6 +123,7 @@ class TCNNInstantNGPField(Field):
             },
         )
 
+
         in_dim = self.direction_encoding.n_output_dims + self.geo_feat_dim
         if self.use_appearance_embedding:
             in_dim += self.appearance_embedding_dim

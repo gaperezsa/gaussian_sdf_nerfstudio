@@ -20,6 +20,7 @@ gaussian_NeRF_Field implementations using tiny-cuda-nn, torch, ....
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from nerfacc import ContractionType, contract
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType
@@ -46,6 +47,17 @@ def get_normalized_directions(directions: TensorType["bs":..., 3]):
     """
     return (directions + 1.0) / 2.0
 
+#adapted from https://stackoverflow.com/questions/67633879/implementing-a-3d-gaussian-blur-using-separable-2d-convolutions-in-pytorch
+def make_gaussian_kernel(sigma):
+        ks = int(sigma * 5)
+        if ks % 2 == 0:
+            ks += 1
+        ts = torch.linspace(-ks // 2, ks // 2 + 1, ks)
+        gauss = torch.exp((-(ts / sigma)**2 / 2))
+        kernel = gauss / gauss.sum()
+
+        return kernel
+
 
 class TCNNGaussianNeRFField(Field):
     """TCNN implementation of the gaussian NeRF Field.
@@ -68,6 +80,7 @@ class TCNNGaussianNeRFField(Field):
     def __init__(
         self,
         aabb,
+        sigma = 1,
         num_layers: int = 2,
         hidden_dim: int = 64,
         geo_feat_dim: int = 7,
@@ -103,17 +116,30 @@ class TCNNGaussianNeRFField(Field):
             },
         )
 
-        self.base_encoder = tcnn.Encoding(
+        self.mlp_base = tcnn.NetworkWithInputEncoding(
             n_input_dims=3,
+            n_output_dims=1 + self.geo_feat_dim,
             encoding_config={
-                "otype": "Grid",
-                "type": "Tiled",
-                "n_levels": 1,
-                "n_features_per_level": 8, #apparently this number has to be power of 2 but only up to 8.
-                "base_resolution": 256,
-                "interpolation": "Linear"
-            }
+                "otype": "HashGrid",
+                "n_levels": num_levels,
+                "n_features_per_level": 2,
+                "log2_hashmap_size": log2_hashmap_size,
+                "base_resolution": 16,
+                "per_level_scale": per_level_scale,
+            },
+            network_config={
+                "otype": "FullyFusedMLP",
+                "activation": "ReLU",
+                "output_activation": "None",
+                "n_neurons": hidden_dim,
+                "n_hidden_layers": num_layers - 1,
+            },
         )
+
+        self.f = Parameter(torch.ones(256,256,256))
+
+        #in order to apply this kernel, it needs to be in the same device as f
+        self.gaussian_kernel = make_gaussian_kernel(sigma).cuda()
 
         in_dim = self.direction_encoding.n_output_dims + self.geo_feat_dim
         if self.use_appearance_embedding:
@@ -130,18 +156,45 @@ class TCNNGaussianNeRFField(Field):
             },
         )
 
+    
+    #adapted from https://stackoverflow.com/questions/67633879/implementing-a-3d-gaussian-blur-using-separable-2d-convolutions-in-pytorch
+    def apply_3d_gaussian_blur(self,input_grid):
+        # Make a test volume
+        vol = input_grid
+
+        # use class kernel
+        k = self.gaussian_kernel
+
+        # Separable 1D convolution
+        vol_in = vol[None, None, ...]
+        k1d = k[None, None, :, None, None]
+        for i in range(3):
+            vol_in = vol_in.permute(0, 1, 4, 2, 3)
+            vol_in = F.conv3d(vol_in, k1d, stride=1, padding=(len(k) // 2, 0, 0))
+        vol_3d_sep = vol_in
+        #print((vol_3d- vol_3d_sep).abs().max()) # something ~1e-7
+        #print(torch.allclose(vol_3d, vol_3d_sep)) # allclose checks if it is around 1e-8
+        return vol_3d_sep
+
+
+
     def get_density(self, ray_samples: RaySamples):
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
         positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
 
-        #import pdb; pdb.set_trace()
-        h = self.base_encoder(positions_flat).view(*ray_samples.frustums.shape, -1)
-        density_before_activation, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+        h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
+        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+
+        positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
+        smoothed_grid = self.apply_3d_gaussian_blur(self.f)
+        density_before_activation = F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
+        density_before_activation = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
 
         # Rectifying the density with an exponential is much more stable than a ReLU or
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
+
         density = trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
 
