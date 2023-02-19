@@ -115,9 +115,11 @@ class NGPModel(Model):
         )
 
         # Sampler
+        # apparently, if run on the poster example, when instant-ngp-bounded is trained, self.scene_box.aab is [[-8,-8-,8],[8,8,8]] and contraction type is AABB
+        # this contrast is more pronounced when compared to regular ngp, self.scene_box is [[-1,-1,-1],[1,1,1]] and contraction type in UNBOUNDED_SPHERE
         vol_sampler_aabb = self.scene_box.aabb if self.config.contraction_type == ContractionType.AABB else None
         self.sampler = VolumetricSampler(
-            scene_aabb=vol_sampler_aabb,
+            scene_aabb=vol_sampler_aabb, 
             occupancy_grid=self.occupancy_grid,
             density_fn=self.field.density_fn,
         )

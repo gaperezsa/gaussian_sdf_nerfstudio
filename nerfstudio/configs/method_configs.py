@@ -190,11 +190,11 @@ method_configs["instant-ngp-bounded"] = TrainerConfig(
         datamanager=VanillaDataManagerConfig(dataparser=InstantNGPDataParserConfig(), train_num_rays_per_batch=8192),
         model=InstantNGPModelConfig(
             eval_num_rays_per_chunk=8192,
-            contraction_type=ContractionType.AABB,
-            render_step_size=0.001,
-            max_num_samples_per_ray=48,
-            near_plane=0.01,
-            background_color="black",
+            contraction_type=ContractionType.AABB, #instead of unbounded_sphere
+            render_step_size=0.001, #smaller than default one of 0.01
+            max_num_samples_per_ray=48, #double the default ammount
+            near_plane=0.01, #closer near plane to start sampling, default value is 0.05
+            background_color="black", #default color given to untrained areas, default value is "random"
         ),
     ),
     optimizers={
