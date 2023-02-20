@@ -97,6 +97,33 @@ method_configs["gaussian-NeRF"] = TrainerConfig(
     vis="viewer",
 )
 
+method_configs["gaussian-NeRF-bounded"] = TrainerConfig(
+    method_name="gaussian-NeRF-bounded",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=DynamicBatchPipelineConfig(
+        datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(), train_num_rays_per_batch=8192),
+        model=GaussianNeRFModelConfig(
+            eval_num_rays_per_chunk=8192,
+            contraction_type=ContractionType.AABB, #instead of unbounded_sphere
+            render_step_size=0.001, #smaller than default one of 0.01
+            max_num_samples_per_ray=48, #double the default ammount
+            near_plane=0.01, #closer near plane to start sampling, default value is 0.05
+            background_color="black" #default color given to untrained areas, default value is "random"
+        ),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        }
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=64000),
+    vis="viewer",
+)
+
 method_configs["nerfacto"] = TrainerConfig(
     method_name="nerfacto",
     steps_per_eval_batch=500,
