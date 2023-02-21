@@ -64,7 +64,21 @@ class GaussianNeRFModelConfig(ModelConfig):
     max_num_samples_per_ray: int = 24
     """Number of samples in field evaluation."""
     grid_resolution: int = 128
-    """Resolution of the grid used for the field."""
+    """Resolution of the grid used for the occupancy field (instant-ngp one)."""
+    f_init: Literal["ones", "zeros", "rand"] = "ones"
+    """function used to transition f^ grid to f."""
+    f_transition_function: Literal["relu", "sigmoid"] = "sigmoid"
+    """function used to transition f^ grid to f."""
+    f_grid_resolution: int = 256
+    """resolution of f^."""
+    sigma: float = 1.0
+    """standard deviation used in the normal convolution."""
+    g_transition_function: Literal["identity", "sigmoid"] = "sigmoid"
+    """function used to transition smooth grid g to occupancy grid G."""
+    g_transition_alpha: float = 4.0
+    """alpha hyperparameter used in the transition function from g to G."""
+    g_transition_alpha_increments: float = 0
+    """alpha hyperparameter is incremented by this ammount every step."""
     contraction_type: ContractionType = ContractionType.UN_BOUNDED_SPHERE
     """Contraction type used for spatial deformation of the field."""
     cone_angle: float = 0.004
@@ -99,6 +113,13 @@ class GaussianNeRFModel(Model):
         super().populate_modules()
 
         self.field = TCNNGaussianNeRFField(
+            sigma = self.config.sigma,
+            f_init = self.config.f_init,
+            f_transition_function = self.config.f_transition_function,
+            f_grid_resolution = self.config.f_grid_resolution,
+            g_transition_function = self.config.g_transition_function,
+            g_transition_alpha = self.config.g_transition_alpha,
+            g_transition_alpha_increments = self.config.g_transition_alpha_increments,
             aabb=self.scene_box.aabb,
             contraction_type=self.config.contraction_type,
             use_appearance_embedding=self.config.use_appearance_embedding,
@@ -139,6 +160,7 @@ class GaussianNeRFModel(Model):
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
+
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
@@ -149,12 +171,19 @@ class GaussianNeRFModel(Model):
                 step=step,
                 occ_eval_fn=lambda x: self.field.get_opacity(x, self.config.render_step_size),
             )
+        def update_alpha_value(step: int):
+            self.field.g_transition_alpha += self.field.g_transition_alpha_increments
 
         return [
             TrainingCallback(
                 where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
                 update_every_num_iters=1,
                 func=update_occupancy_grid,
+            ),
+            TrainingCallback(
+                where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
+                update_every_num_iters=1,
+                func=update_alpha_value,
             ),
         ]
 
@@ -216,6 +245,12 @@ class GaussianNeRFModel(Model):
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         metrics_dict["F_min"] = self.field.f.min()
+        """ try:
+            metrics_dict["F_25"] = torch.quantile(self.field.f, 0.25, interpolation='midpoint')
+            metrics_dict["F_50"] = torch.quantile(self.field.f, 0.50, interpolation='midpoint')
+            metrics_dict["F_75"] = torch.quantile(self.field.f, 0.75, interpolation='midpoint')
+        except:
+            pass """
         metrics_dict["F_max"] = self.field.f.max()
         metrics_dict["F_mean"] = self.field.f.mean()
         metrics_dict["F_std"] = self.field.f.std()

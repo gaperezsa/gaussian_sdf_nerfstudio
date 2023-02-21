@@ -81,16 +81,22 @@ class TCNNGaussianNeRFField(Field):
         self,
         aabb,
         sigma = 1,
+        f_init = "ones",
+        f_transition_function = "relu",
+        f_grid_resolution = 256,
+        g_transition_function = "sigmoid",
+        g_transition_alpha = 4.0,
+        g_transition_alpha_increments = 0.0,
         num_layers: int = 2,
         hidden_dim: int = 64,
-        geo_feat_dim: int = 7,
+        geo_feat_dim: int = 15,
         num_layers_color: int = 3,
         hidden_dim_color: int = 64,
         use_appearance_embedding: bool = False,
         num_images: Optional[int] = None,
         appearance_embedding_dim: int = 32,
         contraction_type: ContractionType = ContractionType.UN_BOUNDED_SPHERE,
-        num_levels: int = 1,
+        num_levels: int = 16,
         log2_hashmap_size: int = 19,
     ) -> None:
         super().__init__()
@@ -136,10 +142,28 @@ class TCNNGaussianNeRFField(Field):
             },
         )
 
-        self.f = Parameter(torch.ones(256,256,256))
+
+        #learnable f^
+        if f_init == "ones":
+            self.f = Parameter(torch.ones(f_grid_resolution,f_grid_resolution,f_grid_resolution))
+        elif f_init == "zeros":
+            self.f = Parameter(torch.zeros(f_grid_resolution,f_grid_resolution,f_grid_resolution))
+        else :
+            self.f = Parameter(torch.rand(f_grid_resolution,f_grid_resolution,f_grid_resolution))
+        #this function will be applied everytime f^ is queried
+        self.f_transition_function = f_transition_function
 
         #in order to apply this kernel, it needs to be in the same device as f
         self.gaussian_kernel = make_gaussian_kernel(sigma).cuda()
+
+        #this function will be applied to the smoothed grid in order to get occupancy
+        self.g_transition_function = g_transition_function
+
+        #starting alpha value to be used in case g_transition_function is sigmoid
+        self.g_transition_alpha = g_transition_alpha,
+
+        #increments to be applied every step
+        self.g_transition_alpha_increments = g_transition_alpha_increments,
 
         in_dim = self.direction_encoding.n_output_dims + self.geo_feat_dim
         if self.use_appearance_embedding:
@@ -176,6 +200,7 @@ class TCNNGaussianNeRFField(Field):
         #print(torch.allclose(vol_3d, vol_3d_sep)) # allclose checks if it is around 1e-8
         return vol_3d_sep
 
+    
 
 
     def get_density(self, ray_samples: RaySamples):
@@ -187,15 +212,20 @@ class TCNNGaussianNeRFField(Field):
         _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
 
         positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
-        smoothed_grid = self.apply_3d_gaussian_blur(self.f)
+        if self.f_transition_function == "relu":
+            smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.ReLU()(self.f))
+        elif self.f_transition_function == "sigmoid":
+            smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.Sigmoid()(self.f))
+        if self.g_transition_function == "sigmoid":
+            smoothed_grid = torch.nn.Sigmoid()(self.g_transition_alpha*(smoothed_grid-(1/2)))
         density_before_activation = F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
-        density_before_activation = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
+        density = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
 
         # Rectifying the density with an exponential is much more stable than a ReLU or
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
 
-        density = trunc_exp(density_before_activation.to(positions))
+        #density = trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):
