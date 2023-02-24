@@ -220,7 +220,7 @@ class TCNNGaussianNeRFField(Field):
         if self.g_transition_function == "sigmoid":
             smoothed_grid = torch.nn.Sigmoid()(self.g_transition_alpha*(smoothed_grid-(1/2)))
         density_before_activation = F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
-        density = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
+        density_before_activation = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
 
         # Rectifying the density with an exponential is much more stable than a ReLU or
         # softplus, because it enables high post-activation (float32) density outputs
