@@ -254,6 +254,7 @@ class GaussianNeRFModel(Model):
         metrics_dict["F_max"] = self.field.f.max()
         metrics_dict["F_mean"] = self.field.f.mean()
         metrics_dict["F_std"] = self.field.f.std()
+        metrics_dict["alpha_value"] = self.field.g_transition_alpha
 
         return metrics_dict
 

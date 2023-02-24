@@ -149,7 +149,8 @@ class TCNNGaussianNeRFField(Field):
         elif f_init == "zeros":
             self.f = Parameter(torch.zeros(f_grid_resolution,f_grid_resolution,f_grid_resolution))
         else :
-            self.f = Parameter(torch.rand(f_grid_resolution,f_grid_resolution,f_grid_resolution))
+            self.f = Parameter((1/2)*(torch.rand(f_grid_resolution,f_grid_resolution,f_grid_resolution))+(1/2)) #random uniformly distributed between 1/2 and 1
+
         #this function will be applied everytime f^ is queried
         self.f_transition_function = f_transition_function
 
@@ -160,10 +161,10 @@ class TCNNGaussianNeRFField(Field):
         self.g_transition_function = g_transition_function
 
         #starting alpha value to be used in case g_transition_function is sigmoid
-        self.g_transition_alpha = g_transition_alpha,
+        self.g_transition_alpha = g_transition_alpha
 
         #increments to be applied every step
-        self.g_transition_alpha_increments = g_transition_alpha_increments,
+        self.g_transition_alpha_increments = g_transition_alpha_increments
 
         in_dim = self.direction_encoding.n_output_dims + self.geo_feat_dim
         if self.use_appearance_embedding:
@@ -225,7 +226,7 @@ class TCNNGaussianNeRFField(Field):
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
 
-        #density = trunc_exp(density_before_activation.to(positions))
+        density = trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):
