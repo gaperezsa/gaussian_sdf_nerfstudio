@@ -153,6 +153,9 @@ class TCNNGaussianNeRFField(Field):
 
         #this function will be applied everytime f^ is queried
         self.f_transition_function = f_transition_function
+        
+        #store sigma for certification radii calculation
+        self.sigma = sigma
 
         #in order to apply this kernel, it needs to be in the same device as f
         self.gaussian_kernel = make_gaussian_kernel(sigma).cuda()
@@ -201,8 +204,32 @@ class TCNNGaussianNeRFField(Field):
         #print(torch.allclose(vol_3d, vol_3d_sep)) # allclose checks if it is around 1e-8
         return vol_3d_sep
 
-    
+    def get_certified_radius(self, ray_samples: RaySamples):
+        positions = ray_samples.frustums.get_positions()
+        positions_flat = positions.view(-1, 3)
+        positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
+        positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
 
+        if self.f_transition_function == "relu":
+            smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.ReLU()(self.f))
+        elif self.f_transition_function == "sigmoid":
+            smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.Sigmoid()(self.f))
+        
+        m = torch.distributions.normal.Normal(torch.tensor([0.0]).cuda(), torch.tensor([1.0]).cuda())
+        radii = self.sigma * m.icdf(F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True))
+        radii = radii.squeeze()
+
+        sdf_grads = torch.autograd.grad(
+            outputs=radii,
+            inputs=positions_rescaled,
+            grad_outputs=torch.ones_like(radii),
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True)[0]
+        
+        eikonal_loss = ((sdf_grads.norm(2, dim=2) - 1) ** 2).mean()
+
+        return radii, eikonal_loss
 
     def get_density(self, ray_samples: RaySamples):
         positions = ray_samples.frustums.get_positions()
@@ -217,9 +244,12 @@ class TCNNGaussianNeRFField(Field):
             smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.ReLU()(self.f))
         elif self.f_transition_function == "sigmoid":
             smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.Sigmoid()(self.f))
+
         if self.g_transition_function == "sigmoid":
-            smoothed_grid = torch.nn.Sigmoid()(self.g_transition_alpha*(smoothed_grid-(1/2)))
-        density_before_activation = F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
+            arg_maxed_smoothed_grid = torch.nn.Sigmoid()(self.g_transition_alpha*(smoothed_grid-(1/2)))
+        else:
+            arg_maxed_smoothed_grid = smoothed_grid
+        density_before_activation = F.grid_sample(arg_maxed_smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
         density_before_activation = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
 
         # Rectifying the density with an exponential is much more stable than a ReLU or

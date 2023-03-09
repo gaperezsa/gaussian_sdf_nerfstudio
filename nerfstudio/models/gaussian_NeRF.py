@@ -236,6 +236,8 @@ class GaussianNeRFModel(Model):
             "depth": depth,
             "alive_ray_mask": alive_ray_mask,  # the rays we kept from sampler
             "num_samples_per_ray": packed_info[:, 1],
+            "certified_radii": field_outputs["certified_radii"],
+            "eikonal_loss": field_outputs["eikonal_loss"],
         }
         return outputs
 
@@ -262,7 +264,9 @@ class GaussianNeRFModel(Model):
         image = batch["image"].to(self.device)
         mask = outputs["alive_ray_mask"]
         rgb_loss = self.rgb_loss(image[mask], outputs["rgb"][mask])
+
         loss_dict = {"rgb_loss": rgb_loss}
+
         return loss_dict
 
     def get_image_metrics_and_images(
