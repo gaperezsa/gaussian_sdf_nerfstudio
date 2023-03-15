@@ -236,8 +236,6 @@ class GaussianNeRFModel(Model):
             "depth": depth,
             "alive_ray_mask": alive_ray_mask,  # the rays we kept from sampler
             "num_samples_per_ray": packed_info[:, 1],
-            "certified_radii": field_outputs["certified_radii"],
-            "eikonal_loss": field_outputs["eikonal_loss"],
         }
         return outputs
 
@@ -282,6 +280,45 @@ class GaussianNeRFModel(Model):
         )
         alive_ray_mask = colormaps.apply_colormap(outputs["alive_ray_mask"])
 
+        try:
+            with torch.enable_grad():
+                #import pdb;pdb.set_trace()
+                radii, eikonal_loss = self.field.get_certified_radius()
+                if radii is not None:
+                    min_scalar = -4*self.field.sigma
+                    max_scalar = 4*self.field.sigma
+
+                    radiix = radii[self.field.f.shape[-1],:,:]
+                    radiix_heatmap = (radiix - min_scalar)/(max_scalar - min_scalar)
+                    radiix_heatmap = torch.clamp(radiix_heatmap,0,1)
+                    radiix_heatmap = radiix_heatmap.detach().cpu()
+                    radiix_heatmap = radiix_heatmap.unsqueeze(2)
+
+                    radiiy = radii[:,self.field.f.shape[-1],:]
+                    radiiy_heatmap = (radiiy - min_scalar)/(max_scalar - min_scalar)
+                    radiiy_heatmap = torch.clamp(radiiy_heatmap,0,1)
+                    radiiy_heatmap = radiiy_heatmap.detach().cpu()
+                    radiiy_heatmap = radiiy_heatmap.unsqueeze(2)
+
+                    radiiz = radii[:,:,self.field.f.shape[-1]]
+                    radiiz_heatmap = (radiiz - min_scalar)/(max_scalar - min_scalar)
+                    radiiz_heatmap = torch.clamp(radiiz_heatmap,0,1)
+                    radiiz_heatmap = radiiz_heatmap.detach().cpu()
+                    radiiz_heatmap = radiiz_heatmap.unsqueeze(2)
+
+                    '''
+                    plt.rcParams["figure.figsize"] = (12,12)
+                    ax = sns.heatmap(radii[self.field.f.shape[-1],:,:].detach().cpu().numpy())
+                    plt.savefig('foo.jpg', bbox_inches='tight')
+                    orig_image = Image.open('foo.jpg')
+                    im_matrix = np.array(orig_image)
+                    radii_heatmap = torch.tensor(im_matrix,dtype=torch.float32)
+                    plt.clf()
+                    '''
+                    
+        except:
+            print("no certified radii being calculated")
+
         combined_rgb = torch.cat([image, rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
         combined_depth = torch.cat([depth], dim=1)
@@ -304,6 +341,9 @@ class GaussianNeRFModel(Model):
             "accumulation": combined_acc,
             "depth": combined_depth,
             "alive_ray_mask": combined_alive_ray_mask,
+            "radiix_heatmap" : radiix_heatmap,
+            "radiiy_heatmap" : radiiy_heatmap,
+            "radiiz_heatmap" : radiiz_heatmap,
         }
 
         return metrics_dict, images_dict

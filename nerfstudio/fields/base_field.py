@@ -55,7 +55,7 @@ class Field(nn.Module):
         return density
 
     @abstractmethod
-    def get_certified_radius(self, ray_samples: RaySamples):
+    def get_certified_radius(self):
         """Computes and returns the densities. Returns a tensor of densities and a tensor of features.
 
         Args:
@@ -111,20 +111,13 @@ class Field(nn.Module):
         Args:
             ray_samples: Samples to evaluate field on.
         """
-        import pdb;pdb.set_trace()
         if compute_normals:
             with torch.enable_grad():
                 density, density_embedding = self.get_density(ray_samples)
         else:
             density, density_embedding = self.get_density(ray_samples)
 
-        try:
-            radii, eikonal_loss = self.get_certified_radius(ray_samples)
-            if radii is not None:
-                field_outputs["certified_radii"] = torch.squeeze(radii)
-                field_outputs["eikonal_loss"] = torch.squeeze(eikonal_loss)
-        except:
-            print("no certified radii being calculated")
+        
 
         field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
         field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore

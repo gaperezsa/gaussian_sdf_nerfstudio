@@ -21,6 +21,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 from nerfacc import ContractionType, contract
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType
@@ -204,31 +205,56 @@ class TCNNGaussianNeRFField(Field):
         #print(torch.allclose(vol_3d, vol_3d_sep)) # allclose checks if it is around 1e-8
         return vol_3d_sep
 
-    def get_certified_radius(self, ray_samples: RaySamples):
+    
+
+    def get_certified_radius(self):
+
+        #taken from https://stackoverflow.com/questions/11144513/cartesian-product-of-x-and-y-array-points-into-single-array-of-2d-points
+        def cartesian_product(*arrays):
+            la = len(arrays)
+            dtype = np.result_type(*arrays)
+            arr = np.empty([len(a) for a in arrays] + [la], dtype=dtype)
+            for i, a in enumerate(np.ix_(*arrays)):
+                arr[...,i] = a
+            return arr.reshape(-1, la)
+        
+        '''
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
         positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
         positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
+        positions_rescaled.requires_grad = True
+        '''
+
+        
+        space_discrete_sample_indexes = np.linspace(-1, 1, 2*(self.f.shape[-1]))
+        positions = cartesian_product(space_discrete_sample_indexes,space_discrete_sample_indexes,space_discrete_sample_indexes)
+        positions = torch.tensor(positions,dtype=torch.float32).cuda()
+        positions.requires_grad = True
 
         if self.f_transition_function == "relu":
             smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.ReLU()(self.f))
         elif self.f_transition_function == "sigmoid":
             smoothed_grid = self.apply_3d_gaussian_blur(torch.nn.Sigmoid()(self.f))
+
         
         m = torch.distributions.normal.Normal(torch.tensor([0.0]).cuda(), torch.tensor([1.0]).cuda())
-        radii = self.sigma * m.icdf(F.grid_sample(smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True))
+        radii = self.sigma * m.icdf(F.interpolate(smoothed_grid,scale_factor=2))
         radii = radii.squeeze()
 
+        output_aux = (self.sigma * m.icdf(F.grid_sample(smoothed_grid,positions[None,None,None,...],align_corners=True))).squeeze()
+
         sdf_grads = torch.autograd.grad(
-            outputs=radii,
-            inputs=positions_rescaled,
-            grad_outputs=torch.ones_like(radii),
+            outputs=output_aux,
+            inputs=positions,
+            grad_outputs=torch.ones_like(output_aux),
             create_graph=True,
             retain_graph=True,
             only_inputs=True)[0]
         
-        eikonal_loss = ((sdf_grads.norm(2, dim=2) - 1) ** 2).mean()
+        eikonal_loss = ((sdf_grads.norm(2, dim=1) - 1) ** 2).mean()
 
+        #radii = radii.reshape(2*(self.f.shape[-1]),2*(self.f.shape[-1]),2*(self.f.shape[-1]))
         return radii, eikonal_loss
 
     def get_density(self, ray_samples: RaySamples):
