@@ -79,6 +79,10 @@ class GaussianNeRFModelConfig(ModelConfig):
     """alpha hyperparameter used in the transition function from g to G."""
     g_transition_alpha_increments: float = 0
     """alpha hyperparameter is incremented by this ammount every step."""
+    occupancy_to_density_transformation_function : Literal["linear","internal_exponential","external_exponential","internal_log","external_log"]
+    """function used to transition from occupancy to density"""
+    density_multiplier : float = 1.0
+    """constant multiplier of output density."""
     contraction_type: ContractionType = ContractionType.UN_BOUNDED_SPHERE
     """Contraction type used for spatial deformation of the field."""
     cone_angle: float = 0.004
@@ -120,6 +124,8 @@ class GaussianNeRFModel(Model):
             g_transition_function = self.config.g_transition_function,
             g_transition_alpha = self.config.g_transition_alpha,
             g_transition_alpha_increments = self.config.g_transition_alpha_increments,
+            occupancy_to_density_transformation_function = self.config.occupancy_to_density_transformation_function,
+            density_multiplier = self.config.density_multiplier,
             aabb=self.scene_box.aabb,
             contraction_type=self.config.contraction_type,
             use_appearance_embedding=self.config.use_appearance_embedding,

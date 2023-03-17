@@ -88,6 +88,8 @@ class TCNNGaussianNeRFField(Field):
         g_transition_function = "sigmoid",
         g_transition_alpha = 4.0,
         g_transition_alpha_increments = 0.0,
+        occupancy_to_density_transformation_function = "exponential",
+        density_multiplier = 1.0,
         num_layers: int = 2,
         hidden_dim: int = 64,
         geo_feat_dim: int = 15,
@@ -154,6 +156,9 @@ class TCNNGaussianNeRFField(Field):
 
         #this function will be applied everytime f^ is queried
         self.f_transition_function = f_transition_function
+
+        #this function will be applied after occuapncy is calculated to get density
+        self.occupancy_to_density_transformation_function = occupancy_to_density_transformation_function
         
         #store sigma for certification radii calculation
         self.sigma = sigma
@@ -169,6 +174,9 @@ class TCNNGaussianNeRFField(Field):
 
         #increments to be applied every step
         self.g_transition_alpha_increments = g_transition_alpha_increments
+
+        #constant multiplier of output density
+        self.density_multiplier = density_multiplier
 
         in_dim = self.direction_encoding.n_output_dims + self.geo_feat_dim
         if self.use_appearance_embedding:
@@ -263,7 +271,7 @@ class TCNNGaussianNeRFField(Field):
         positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
 
         h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
-        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+        base_density, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
 
         positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
         if self.f_transition_function == "relu":
@@ -282,7 +290,7 @@ class TCNNGaussianNeRFField(Field):
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
 
-        density = trunc_exp(density_before_activation.to(positions))
+        density = self.density_multiplier * trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):
