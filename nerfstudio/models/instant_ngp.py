@@ -256,6 +256,8 @@ class NGPModel(Model):
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
         # TODO(ethan): return an image dictionary
 
+        self.field.save_density_tensor()
+
         images_dict = {
             "img": combined_rgb,
             "accumulation": combined_acc,

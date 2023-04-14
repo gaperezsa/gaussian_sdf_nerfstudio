@@ -24,6 +24,8 @@ from nerfacc import ContractionType, contract
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType
 
+import numpy as np
+
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.field_components.activations import trunc_exp
@@ -139,11 +141,30 @@ class TCNNInstantNGPField(Field):
             },
         )
 
+    def save_density_tensor(self):
+
+        def cartesian_product(*arrays):
+            la = len(arrays)
+            dtype = np.result_type(*arrays)
+            arr = np.empty([len(a) for a in arrays] + [la], dtype=dtype)
+            for i, a in enumerate(np.ix_(*arrays)):
+                arr[...,i] = a
+            return arr.reshape(-1, la)
+
+        space_discrete_sample_indexes = np.linspace(0, 1, 256)
+        positions = cartesian_product(space_discrete_sample_indexes,space_discrete_sample_indexes,space_discrete_sample_indexes)
+        positions = torch.tensor(positions,dtype=torch.float32).cuda()
+        h = self.mlp_base(positions)
+        density_before_activation, _ = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+        density = trunc_exp(density_before_activation.to(positions))
+        density = density.reshape(256,256,256)
+        torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/instant-ngp-density-field/densities.pt")
+
     def get_density(self, ray_samples: RaySamples):
+        
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
         positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
-
         h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
         density_before_activation, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
 

@@ -79,7 +79,7 @@ class GaussianNeRFModelConfig(ModelConfig):
     """alpha hyperparameter used in the transition function from g to G."""
     g_transition_alpha_increments: float = 0
     """alpha hyperparameter is incremented by this ammount every step."""
-    occupancy_to_density_transformation_function : Literal["linear","internal_exponential","external_exponential","internal_log","external_log"]
+    occupancy_to_density_transformation_function : Literal["linear","internal_exponential","external_exponential","internal_log","external_log"] = "internal_exponential"
     """function used to transition from occupancy to density"""
     density_multiplier : float = 1.0
     """constant multiplier of output density."""

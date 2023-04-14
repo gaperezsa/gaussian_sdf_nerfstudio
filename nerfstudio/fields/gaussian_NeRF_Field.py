@@ -88,7 +88,7 @@ class TCNNGaussianNeRFField(Field):
         g_transition_function = "sigmoid",
         g_transition_alpha = 4.0,
         g_transition_alpha_increments = 0.0,
-        occupancy_to_density_transformation_function = "exponential",
+        occupancy_to_density_transformation_function = "internal_exponential",
         density_multiplier = 1.0,
         num_layers: int = 2,
         hidden_dim: int = 64,
@@ -182,7 +182,7 @@ class TCNNGaussianNeRFField(Field):
         if self.use_appearance_embedding:
             in_dim += self.appearance_embedding_dim
         self.mlp_head = tcnn.Network(
-            n_input_dims=in_dim,
+            n_input_dims=in_dim,  
             n_output_dims=3,
             network_config={
                 "otype": "FullyFusedMLP",
@@ -289,8 +289,19 @@ class TCNNGaussianNeRFField(Field):
         # Rectifying the density with an exponential is much more stable than a ReLU or
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
+        if self.occupancy_to_density_transformation_function == "linear":
+            density = self.density_multiplier * density_before_activation.to(positions)
+        elif self.occupancy_to_density_transformation_function == "internal_exponential":
+            density = trunc_exp(self.density_multiplier * density_before_activation.to(positions))
+        elif self.occupancy_to_density_transformation_function == "external_exponential":
+            density = self.density_multiplier * trunc_exp(density_before_activation.to(positions))
+        elif self.occupancy_to_density_transformation_function == "internal_log":
+            density = torch.log(1+(self.density_multiplier * density_before_activation.to(positions)))
+        elif self.occupancy_to_density_transformation_function == "external_log":
+            density = self.density_multiplier * torch.log(1+density_before_activation.to(positions))
+        else:
+            density = self.density_multiplier * trunc_exp(density_before_activation.to(positions))
 
-        density = self.density_multiplier * trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):

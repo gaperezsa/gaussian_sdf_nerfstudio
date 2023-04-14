@@ -185,3 +185,4 @@ cache/
 package-lock.json
 camera_paths/
 wandb/
+saved-densities/
