@@ -180,7 +180,11 @@ class NGPModel(Model):
                 cone_angle=self.config.cone_angle,
             )
 
-        field_outputs = self.field(ray_samples)
+        if self.training or self.field.saved_density_field == None:
+            field_outputs = self.field(ray_samples)
+        else:
+            field_outputs = self.field(ray_samples,interpolate_output=True)
+            
 
         # accumulation
         packed_info = nerfacc.pack_info(ray_indices, num_rays)

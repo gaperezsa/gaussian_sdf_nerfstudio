@@ -20,6 +20,7 @@ Instant-NGP field implementations using tiny-cuda-nn, torch, ....
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from nerfacc import ContractionType, contract
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType
@@ -87,6 +88,7 @@ class TCNNInstantNGPField(Field):
         self.aabb = Parameter(aabb, requires_grad=False)
         self.geo_feat_dim = geo_feat_dim
         self.contraction_type = contraction_type
+        
 
         self.use_appearance_embedding = use_appearance_embedding
         if use_appearance_embedding:
@@ -141,6 +143,8 @@ class TCNNInstantNGPField(Field):
             },
         )
 
+        self.saved_density_field = None
+
     def save_density_tensor(self):
 
         def cartesian_product(*arrays):
@@ -158,7 +162,26 @@ class TCNNInstantNGPField(Field):
         density_before_activation, _ = torch.split(h, [1, self.geo_feat_dim], dim=-1)
         density = trunc_exp(density_before_activation.to(positions))
         density = density.reshape(256,256,256)
-        torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/instant-ngp-density-field/densities.pt")
+        self.saved_density_field = density
+        torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
+        return density
+
+    def interpolated_output(self, ray_samples: RaySamples):
+        if self.saved_density_field == None:
+            return self.get_density(ray_samples)
+        positions = ray_samples.frustums.get_positions()
+        positions_flat = positions.view(-1, 3)
+        positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
+
+        h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
+        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+
+        positions_rescaled = torch.tensor_split(((positions_flat*2)-1), 2)
+        interpolated_density = F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[0][None,None,None,...],align_corners=True)
+        interpolated_density = torch.cat((interpolated_density,F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[1][None,None,None,...],align_corners=True)),-1)
+        interpolated_density = interpolated_density.view(-1,1) 
+
+        return interpolated_density, base_mlp_out
 
     def get_density(self, ray_samples: RaySamples):
         
@@ -225,3 +248,32 @@ class TCNNInstantNGPField(Field):
 
         opacity = density * step_size
         return opacity
+
+    def forward(self, ray_samples: RaySamples, compute_normals: bool = False, interpolate_output: bool = False):
+        """Evaluates the field at points along the ray.
+
+        Args:
+            ray_samples: Samples to evaluate field on.
+        """
+        if compute_normals:
+            with torch.enable_grad():
+                if interpolate_output:
+                    density, density_embedding = self.interpolated_output(ray_samples)
+                else:
+                    density, density_embedding = self.get_density(ray_samples)
+        else:
+            if interpolate_output:
+                density, density_embedding = self.interpolated_output(ray_samples)
+            else:
+                density, density_embedding = self.get_density(ray_samples)
+
+        
+
+        field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
+        field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
+
+        if compute_normals:
+            with torch.enable_grad():
+                normals = self.get_normals()
+            field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
+        return field_outputs

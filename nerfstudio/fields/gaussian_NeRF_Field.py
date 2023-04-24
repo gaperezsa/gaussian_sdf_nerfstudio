@@ -283,6 +283,8 @@ class TCNNGaussianNeRFField(Field):
             arg_maxed_smoothed_grid = torch.nn.Sigmoid()(self.g_transition_alpha*(smoothed_grid-(1/2)))
         else:
             arg_maxed_smoothed_grid = smoothed_grid
+
+            
         density_before_activation = F.grid_sample(arg_maxed_smoothed_grid,positions_rescaled[None,None,None,...],align_corners=True)
         density_before_activation = density_before_activation.view(-1,1) #to match previous instant-ngp implementation
 
