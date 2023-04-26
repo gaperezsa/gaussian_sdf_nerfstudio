@@ -180,9 +180,11 @@ class NGPModel(Model):
                 cone_angle=self.config.cone_angle,
             )
 
-        if self.training or self.field.saved_density_field == None:
+        if self.training :
             field_outputs = self.field(ray_samples)
         else:
+            if self.field.saved_density_field == None:
+                self.field.save_density_tensor()
             field_outputs = self.field(ray_samples,interpolate_output=True)
             
 
@@ -234,14 +236,18 @@ class NGPModel(Model):
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
 
+        #renew density tensor
+        self.field.save_density_tensor()
+
+
         image = batch["image"].to(self.device)
         rgb = outputs["rgb"]
-        acc = colormaps.apply_colormap(outputs["accumulation"])
+        acc = colormaps.apply_colormap(outputs["accumulation"]) # type: ignore
         depth = colormaps.apply_depth_colormap(
-            outputs["depth"],
-            accumulation=outputs["accumulation"],
+            outputs["depth"], # type: ignore
+            accumulation=outputs["accumulation"], # type: ignore
         )
-        alive_ray_mask = colormaps.apply_colormap(outputs["alive_ray_mask"])
+        alive_ray_mask = colormaps.apply_colormap(outputs["alive_ray_mask"]) # type: ignore
 
         combined_rgb = torch.cat([image, rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
@@ -260,7 +266,7 @@ class NGPModel(Model):
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim), "lpips": float(lpips)}  # type: ignore
         # TODO(ethan): return an image dictionary
 
-        self.field.save_density_tensor()
+        
 
         images_dict = {
             "img": combined_rgb,
