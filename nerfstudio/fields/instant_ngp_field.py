@@ -155,50 +155,35 @@ class TCNNInstantNGPField(Field):
                 arr[...,i] = a
             return arr.reshape(-1, la)
 
-        space_discrete_sample_indexes = np.linspace(0, 1, 256)
+        space_discrete_sample_indexes = np.linspace(0, 1, 380)
         positions = cartesian_product(space_discrete_sample_indexes,space_discrete_sample_indexes,space_discrete_sample_indexes)
         positions = torch.tensor(positions,dtype=torch.float32).cuda().flip(1)
         h = self.mlp_base(positions)
         density_before_activation, _ = torch.split(h, [1, self.geo_feat_dim], dim=-1)
         density = trunc_exp(density_before_activation.to(positions))
-        density = density.reshape(256,256,256)
+        density = density.reshape(380,380,380)
         print("saving density")
+        density = torch.clamp(density, max=2000)
         self.saved_density_field = density
         torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
         return density
 
     def interpolated_output(self, ray_samples: RaySamples):
-        if self.saved_density_field == None:
+
+        if self.saved_density_field is None:
             return self.get_density(ray_samples)    
 
-        
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
         positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
 
 
-        h2 = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
-        _, base_mlp_out = torch.split(h2, [1, self.geo_feat_dim], dim=-1)
+        h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
+        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
         positions_rescaled = (positions_flat*2)-1
         interpolated_density = F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[None,None,None,...],align_corners=True)
     
         interpolated_density = interpolated_density.view(-1,1)
-
-        
-        '''
-        positions = ray_samples.frustums.get_positions()
-        positions_flat = positions.view(-1, 3)
-        positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
-
-        h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
-        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
-
-        positions_rescaled = torch.tensor_split(((positions_flat*2)-1), 2)
-        interpolated_density_one = F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[0][None,None,None,...],align_corners=True)
-        interpolated_density_two = F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[1][None,None,None,...],align_corners=True)
-        interpolated_density = torch.cat((interpolated_density_one,interpolated_density_two),-1)
-        interpolated_density = interpolated_density.view(-1,1) 
-        '''
         return interpolated_density, base_mlp_out
 
     def get_density(self, ray_samples: RaySamples):
