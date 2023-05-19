@@ -19,6 +19,7 @@ Instant-NGP field implementations using tiny-cuda-nn, torch, ....
 
 from typing import Optional
 
+import gc
 import torch
 import torch.nn.functional as F
 from nerfacc import ContractionType, contract
@@ -142,8 +143,9 @@ class TCNNInstantNGPField(Field):
                 "n_hidden_layers": num_layers_color - 1,
             },
         )
+        self.density_field = Parameter((1/2)*(torch.rand(256,256,256))+(1/2)) #random uniformly distributed between 1/2 and 1
 
-        self.saved_density_field = None
+
 
     def save_density_tensor(self):
 
@@ -155,22 +157,27 @@ class TCNNInstantNGPField(Field):
                 arr[...,i] = a
             return arr.reshape(-1, la)
 
-        space_discrete_sample_indexes = np.linspace(0, 1, 380)
+        space_discrete_sample_indexes = np.linspace(0, 1, 256)
         positions = cartesian_product(space_discrete_sample_indexes,space_discrete_sample_indexes,space_discrete_sample_indexes)
         positions = torch.tensor(positions,dtype=torch.float32).cuda().flip(1)
         h = self.mlp_base(positions)
         density_before_activation, _ = torch.split(h, [1, self.geo_feat_dim], dim=-1)
         density = trunc_exp(density_before_activation.to(positions))
-        density = density.reshape(380,380,380)
+        density = density.reshape(256,256,256)
         print("saving density")
         density = torch.clamp(density, max=2000)
-        self.saved_density_field = density
         torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
         return density
 
     def interpolated_output(self, ray_samples: RaySamples):
+        
+        try:
+            density = torch.load("/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
+        except:
+            density = None
+            print("density could not be loaded")
 
-        if self.saved_density_field is None:
+        if density is None:
             return self.get_density(ray_samples)    
 
         positions = ray_samples.frustums.get_positions()
@@ -181,12 +188,31 @@ class TCNNInstantNGPField(Field):
         h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
         _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
         positions_rescaled = (positions_flat*2)-1
-        interpolated_density = F.grid_sample(self.saved_density_field[None,None,...],positions_rescaled[None,None,None,...],align_corners=True)
+        interpolated_density = F.grid_sample(density[None,None,...],positions_rescaled[None,None,None,...],align_corners=True)
     
         interpolated_density = interpolated_density.view(-1,1)
         return interpolated_density, base_mlp_out
 
     def get_density(self, ray_samples: RaySamples):
+        
+        positions = ray_samples.frustums.get_positions()
+        positions_flat = positions.view(-1, 3)
+        positions_flat = contract(x=positions_flat, roi=self.aabb, type=self.contraction_type)
+
+        h = self.mlp_base(positions_flat).view(*ray_samples.frustums.shape, -1)
+        _, base_mlp_out = torch.split(h, [1, self.geo_feat_dim], dim=-1)
+
+        positions_rescaled = (positions_flat*2)-1 #such that now they are between -1 and 1 as torch grid_sample requires
+            
+        density_before_activation = F.grid_sample(self.density_field[None, None, ...],positions_rescaled[None,None,None,...],align_corners=True)
+        density_before_activation = density_before_activation.view(-1,1)
+        # Rectifying the density with an exponential is much more stable than a ReLU or
+        # softplus, because it enables high post-activation (float32) density outputs
+        # from smaller internal (float16) parameters.
+        density = trunc_exp(density_before_activation.to(positions))
+        return density, base_mlp_out
+    
+    def deafult_get_density(self, ray_samples: RaySamples):
         
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)

@@ -183,12 +183,13 @@ class NGPModel(Model):
         if self.training :
             field_outputs = self.field(ray_samples)
         else:
-            if self.field.saved_density_field == None:
+            if self.field.saved_density_field is None:
                 self.field.save_density_tensor()
             field_outputs = self.field(ray_samples,interpolate_output=True)
             
 
         # accumulation
+        import pdb;pdb.set_trace()
         packed_info = nerfacc.pack_info(ray_indices, num_rays)
         weights = nerfacc.render_weight_from_density(
             packed_info=packed_info,
