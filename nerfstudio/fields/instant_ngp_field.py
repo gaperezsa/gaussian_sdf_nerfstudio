@@ -143,9 +143,12 @@ class TCNNInstantNGPField(Field):
                 "n_hidden_layers": num_layers_color - 1,
             },
         )
-        self.density_field = Parameter((1/2)*(torch.rand(256,256,256))+(1/2)) #random uniformly distributed between 1/2 and 1
 
+        #used when density comes from trained grid rather than mlp
+        self.density_field = None #Parameter((1/2)*(torch.rand(256,256,256))+(1/2)) #random uniformly distributed between 1/2 and 1
 
+        #grid sampled at eval time from mlp for interpolated output
+        self.saved_density_field = None
 
     def save_density_tensor(self):
 
@@ -166,19 +169,24 @@ class TCNNInstantNGPField(Field):
         density = density.reshape(256,256,256)
         print("saving density")
         density = torch.clamp(density, max=2000)
+        self.saved_density_field = density
         torch.save(density,"/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
-        return density
+        return
 
     def interpolated_output(self, ray_samples: RaySamples):
-        
+        density = None
+
         try:
-            density = torch.load("/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
+            density = self.saved_density_field
         except:
-            density = None
-            print("density could not be loaded")
+            print("density could not be declared through object")
 
         if density is None:
-            return self.get_density(ray_samples)    
+            try:
+                density = torch.load("/home/gperezsantamaria/Documents/gaussian_sdf_nerfstudio/saved-densities/densities.pt")
+            except:
+                print("density could not be loaded")
+                return self.get_density(ray_samples)  
 
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
@@ -193,7 +201,7 @@ class TCNNInstantNGPField(Field):
         interpolated_density = interpolated_density.view(-1,1)
         return interpolated_density, base_mlp_out
 
-    def get_density(self, ray_samples: RaySamples):
+    def direct_get_density(self, ray_samples: RaySamples):
         
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
@@ -212,7 +220,7 @@ class TCNNInstantNGPField(Field):
         density = trunc_exp(density_before_activation.to(positions))
         return density, base_mlp_out
     
-    def deafult_get_density(self, ray_samples: RaySamples):
+    def get_density(self, ray_samples: RaySamples):
         
         positions = ray_samples.frustums.get_positions()
         positions_flat = positions.view(-1, 3)
@@ -285,19 +293,24 @@ class TCNNInstantNGPField(Field):
         Args:
             ray_samples: Samples to evaluate field on.
         """
+        
+        #if compute_normals:
+        #    with torch.enable_grad():
+        #        if interpolate_output:
+        #            density, density_embedding = self.interpolated_output(ray_samples)
+        #        else:
+        #            density, density_embedding = self.get_density(ray_samples)
+        #else:
+        #    if interpolate_output:
+        #        density, density_embedding = self.interpolated_output(ray_samples)
+        #    else:
+        #        density, density_embedding = self.get_density(ray_samples)
+        
         if compute_normals:
             with torch.enable_grad():
-                if interpolate_output:
-                    density, density_embedding = self.interpolated_output(ray_samples)
-                else:
-                    density, density_embedding = self.get_density(ray_samples)
-        else:
-            if interpolate_output:
-                density, density_embedding = self.interpolated_output(ray_samples)
-            else:
                 density, density_embedding = self.get_density(ray_samples)
-
-        
+        else:
+            density, density_embedding = self.get_density(ray_samples)
 
         field_outputs = self.get_outputs(ray_samples, density_embedding=density_embedding)
         field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
